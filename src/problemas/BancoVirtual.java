@@ -2,15 +2,72 @@ package problemas;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.ThreadLocalRandom;
+import java.util.Random;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
 
 public class BancoVirtual {
 
-    private static final int SALDO_INICIAL = 10_000;
-    private static final int NUM_CLIENTES = 50;
-    private static final int OPERACIONES_POR_CLIENTE = 10;
 
+    static final int CLIENTES = 50;
+    static final int OPERACIONES_POR_CLIENTE = 10;
+    static final int TOTAL_OPERACIONES = CLIENTES * OPERACIONES_POR_CLIENTE;
+
+    static final double SALDO_INICIAL = 10_000.00;
+
+
+    enum TipoOperacion {
+        RETIRO,
+        INGRESO
+    }
+
+    // Una operación que realizará un cliente
+    static class Operacion {
+
+        private final int id;
+        private final TipoOperacion tipo;
+        private final double cantidad;
+
+        public Operacion(int id, TipoOperacion tipo, double cantidad) {
+            this.id = id;
+            this.tipo = tipo;
+            this.cantidad = cantidad;
+        }
+
+        public int getId() {
+            return id;
+        }
+
+        public TipoOperacion getTipo() {
+            return tipo;
+        }
+
+        public double getCantidad() {
+            return cantidad;
+        }
+    }
+
+
+    static class Resultado {
+
+        double saldoFinal;
+        int exitosas;
+        int fallidas;
+        long tiempoMs;
+
+        public Resultado(
+                double saldoFinal,
+                int exitosas,
+                int fallidas,
+                long tiempoMs) {
+
+            this.saldoFinal = saldoFinal;
+            this.exitosas = exitosas;
+            this.fallidas = fallidas;
+            this.tiempoMs = tiempoMs;
+        }
+    }
 
 
     interface Cuenta {
@@ -21,65 +78,26 @@ public class BancoVirtual {
 
         double consultarSaldo();
 
+        void registrarOperacion(String texto);
+
         List<String> obtenerHistorial();
     }
 
-    static class Operacion {
-        enum Tipo{
-            RETIRO,
-            INGRESO
-        }
 
-        private final Tipo tipo;
-        private final double cantidad;
-
-        private Operacion(Tipo tipo, double cantidad) {
-            this.tipo = tipo;
-            this.cantidad = cantidad;
-        }
-
-        public Tipo getTipo() {
-            return tipo;
-        }
-        public double getCantidad() {
-            return cantidad;
-        }
-    }
-
-    static class Resultado {
-
-        double saldoFinal;
-        int exitosas;
-        int fallidas;
-        long tiempo;
-
-        public Resultado(
-                double saldoFinal,
-                int exitosas,
-                int fallidas,
-                long tiempo) {
-
-            this.saldoFinal = saldoFinal;
-            this.exitosas = exitosas;
-            this.fallidas = fallidas;
-            this.tiempo = tiempo;
-        }
-    }
-
-    static class CuentaLock implements Cuenta {
+    static class CuentaReentrantLock implements Cuenta {
 
         private double saldo;
 
-        private final ReentrantLock lock =
-                new ReentrantLock();
+        private final ReentrantLock lock = new ReentrantLock();
 
         private final List<String> historial =
                 new ArrayList<>();
 
-        public CuentaLock(double saldoInicial) {
-            saldo = saldoInicial;
+        public CuentaReentrantLock(double saldoInicial) {
+            this.saldo = saldoInicial;
         }
 
+        @Override
         public boolean retirar(double cantidad) {
 
             lock.lock();
@@ -90,24 +108,29 @@ public class BancoVirtual {
 
                     saldo -= cantidad;
 
-                    registrar(
-                            "RETIRO -" + cantidad
+                    registrarOperacion(
+                            "RETIRO -" + String.format("%.2f", cantidad)
                     );
 
                     return true;
+
+                } else {
+
+                    registrarOperacion(
+                            "RETIRO FALLIDO -" +
+                                    String.format("%.2f", cantidad)
+                    );
+
+                    return false;
                 }
 
-                registrar(
-                        "RETIRO FALLIDO -" + cantidad
-                );
-
-                return false;
-
             } finally {
+
                 lock.unlock();
             }
         }
 
+        @Override
         public void ingresar(double cantidad) {
 
             lock.lock();
@@ -116,48 +139,51 @@ public class BancoVirtual {
 
                 saldo += cantidad;
 
-                registrar(
-                        "INGRESO +" + cantidad
+                registrarOperacion(
+                        "INGRESO +" +
+                                String.format("%.2f", cantidad)
                 );
 
             } finally {
+
                 lock.unlock();
             }
         }
 
+        @Override
         public double consultarSaldo() {
 
             lock.lock();
 
             try {
                 return saldo;
+
             } finally {
                 lock.unlock();
             }
         }
 
-        private void registrar(String mensaje) {
+        @Override
+        public void registrarOperacion(String texto) {
 
-            historial.add(
-                    System.currentTimeMillis()
-                            + " | "
-                            + mensaje
-            );
+            historial.add(texto);
         }
 
+        @Override
         public List<String> obtenerHistorial() {
 
             lock.lock();
 
             try {
+
                 return new ArrayList<>(historial);
+
             } finally {
+
                 lock.unlock();
             }
         }
     }
-
-
 
     static class CuentaSynchronized implements Cuenta {
 
@@ -167,317 +193,477 @@ public class BancoVirtual {
                 new ArrayList<>();
 
         public CuentaSynchronized(double saldoInicial) {
-            saldo = saldoInicial;
+            this.saldo = saldoInicial;
         }
 
+        @Override
         public synchronized boolean retirar(double cantidad) {
 
             if (saldo >= cantidad) {
 
                 saldo -= cantidad;
 
-                registrar(
-                        "RETIRO -" + cantidad
+                registrarOperacion(
+                        "RETIRO -" +
+                                String.format("%.2f", cantidad)
                 );
 
                 return true;
+
+            } else {
+
+                registrarOperacion(
+                        "RETIRO FALLIDO -" +
+                                String.format("%.2f", cantidad)
+                );
+
+                return false;
             }
-
-            registrar(
-                    "RETIRO FALLIDO -" + cantidad
-            );
-
-            return false;
         }
 
+        @Override
         public synchronized void ingresar(double cantidad) {
 
             saldo += cantidad;
 
-            registrar(
-                    "INGRESO +" + cantidad
+            registrarOperacion(
+                    "INGRESO +" +
+                            String.format("%.2f", cantidad)
             );
         }
 
+        @Override
         public synchronized double consultarSaldo() {
+
             return saldo;
         }
 
-        private void registrar(String mensaje) {
+        @Override
+        public synchronized void registrarOperacion(String texto) {
 
-            historial.add(
-                    System.currentTimeMillis()
-                            + " | "
-                            + mensaje
-            );
+            historial.add(texto);
         }
 
+        @Override
         public synchronized List<String> obtenerHistorial() {
 
             return new ArrayList<>(historial);
         }
     }
 
-
     static class CuentaVolatile implements Cuenta {
 
         private volatile double saldo;
 
-        private final List<String> historial =
-                new ArrayList<>();
+        private final ConcurrentLinkedQueue<String> historial =
+                new ConcurrentLinkedQueue<>();
 
         public CuentaVolatile(double saldoInicial) {
-            saldo = saldoInicial;
+            this.saldo = saldoInicial;
         }
 
+        @Override
         public boolean retirar(double cantidad) {
+
+
 
             if (saldo >= cantidad) {
 
                 saldo -= cantidad;
 
-                registrar(
-                        "RETIRO -" + cantidad
+                registrarOperacion(
+                        "RETIRO -" +
+                                String.format("%.2f", cantidad)
                 );
 
                 return true;
+
+            } else {
+
+                registrarOperacion(
+                        "RETIRO FALLIDO -" +
+                                String.format("%.2f", cantidad)
+                );
+
+                return false;
             }
-
-            registrar(
-                    "RETIRO FALLIDO -" + cantidad
-            );
-
-            return false;
         }
 
+        @Override
         public void ingresar(double cantidad) {
+
+
 
             saldo += cantidad;
 
-            registrar(
-                    "INGRESO +" + cantidad
+            registrarOperacion(
+                    "INGRESO +" +
+                            String.format("%.2f", cantidad)
             );
         }
 
+        @Override
         public double consultarSaldo() {
+
             return saldo;
         }
 
-        private void registrar(String mensaje) {
+        @Override
+        public void registrarOperacion(String texto) {
 
-            historial.add(
-                    System.currentTimeMillis()
-                            + " | "
-                            + mensaje
-            );
+            historial.add(texto);
         }
 
+        @Override
         public List<String> obtenerHistorial() {
+
             return new ArrayList<>(historial);
         }
     }
 
-    private static List<Operacion> generarOperaciones() {
 
-        List<Operacion> operaciones = new ArrayList<>();
+    static List<List<Operacion>> generarOperaciones() {
 
-        for (int i = 0; i < 500; i++) {
+        Random random = new Random(12345);
 
-            double probabilidad =
-                    ThreadLocalRandom.current().nextDouble();
+        List<List<Operacion>> operacionesClientes =
+                new ArrayList<>();
 
-            if (probabilidad < 0.60) {
+        int idOperacion = 1;
 
-                double cantidad =
-                        ThreadLocalRandom.current()
-                                .nextInt(1, 101);
+        for (int cliente = 0; cliente < CLIENTES; cliente++) {
 
-                operaciones.add(
-                        new Operacion(
-                                Operacion.Tipo.RETIRO,
-                                cantidad
-                        )
-                );
+            List<Operacion> operaciones =
+                    new ArrayList<>();
 
-            } else {
+            for (int i = 0;
+                 i < OPERACIONES_POR_CLIENTE;
+                 i++) {
 
-                double cantidad =
-                        ThreadLocalRandom.current()
-                                .nextInt(1, 51);
+                // 60% retiro
+                // 40% ingreso
 
-                operaciones.add(
-                        new Operacion(
-                                Operacion.Tipo.INGRESO,
-                                cantidad
-                        )
-                );
+                if (random.nextDouble() < 0.60) {
+
+                    double cantidad =
+                            1 + random.nextInt(100);
+
+                    operaciones.add(
+                            new Operacion(
+                                    idOperacion++,
+                                    TipoOperacion.RETIRO,
+                                    cantidad
+                            )
+                    );
+
+                } else {
+
+                    double cantidad =
+                            1 + random.nextInt(50);
+
+                    operaciones.add(
+                            new Operacion(
+                                    idOperacion++,
+                                    TipoOperacion.INGRESO,
+                                    cantidad
+                            )
+                    );
+                }
             }
+
+            operacionesClientes.add(operaciones);
         }
 
-        return operaciones;
+        return operacionesClientes;
     }
 
-    private static void ejecutarClientes(
-            Cuenta cuenta)
-            throws InterruptedException {
 
-        Thread[] clientes =
-                new Thread[NUM_CLIENTES];
+    static Resultado ejecutarClientes(
+            Cuenta cuenta,
+            List<List<Operacion>> operacionesClientes) {
 
-        for (int i = 0; i < NUM_CLIENTES; i++) {
+        AtomicInteger exitosas =
+                new AtomicInteger(0);
 
-            clientes[i] = new Thread(() -> {
+        AtomicInteger fallidas =
+                new AtomicInteger(0);
 
-                for (int j = 0;
-                     j < OPERACIONES_POR_CLIENTE;
-                     j++) {
+        List<Thread> hilos =
+                new ArrayList<>();
 
+        Random random = new Random();
+
+        long inicio = System.currentTimeMillis();
+
+
+        for (int i = 0; i < CLIENTES; i++) {
+
+            List<Operacion> operaciones =
+                    operacionesClientes.get(i);
+
+            int numeroCliente = i + 1;
+
+            Thread hilo = new Thread(() -> {
+
+                for (Operacion operacion : operaciones) {
+
+                    // Simulamos tiempo de procesamiento
                     try {
 
-                        int tiempo =
-                                ThreadLocalRandom.current()
-                                        .nextInt(100, 301);
+                        int espera =
+                                100 + random.nextInt(201);
 
-                        Thread.sleep(tiempo);
-
-                        double probabilidad =
-                                ThreadLocalRandom.current()
-                                        .nextDouble();
-
-                        if (probabilidad < 0.60) {
-
-                            double cantidad =
-                                    ThreadLocalRandom.current()
-                                            .nextInt(1, 101);
-
-                            cuenta.retirar(cantidad);
-
-                        } else {
-
-                            double cantidad =
-                                    ThreadLocalRandom.current()
-                                            .nextInt(1, 51);
-
-                            cuenta.ingresar(cantidad);
-                        }
+                        Thread.sleep(espera);
 
                     } catch (InterruptedException e) {
 
                         Thread.currentThread().interrupt();
                         return;
                     }
-                }
-            });
 
-            clientes[i].start();
+                    boolean resultado;
+
+                    if (operacion.getTipo()
+                            == TipoOperacion.RETIRO) {
+
+                        resultado =
+                                cuenta.retirar(
+                                        operacion.getCantidad()
+                                );
+
+                    } else {
+
+                        cuenta.ingresar(
+                                operacion.getCantidad()
+                        );
+
+                        resultado = true;
+                    }
+
+                    if (resultado) {
+
+                        exitosas.incrementAndGet();
+
+                    } else {
+
+                        fallidas.incrementAndGet();
+                    }
+                }
+
+            }, "Cliente-" + numeroCliente);
+
+            hilos.add(hilo);
         }
 
-        for (Thread cliente : clientes) {
-            cliente.join();
+
+        for (Thread hilo : hilos) {
+            hilo.start();
+        }
+
+
+        for (Thread hilo : hilos) {
+
+            try {
+
+                hilo.join();
+
+            } catch (InterruptedException e) {
+
+                Thread.currentThread().interrupt();
+            }
+        }
+
+        long fin = System.currentTimeMillis();
+
+        long tiempo =
+                fin - inicio;
+
+        return new Resultado(
+                cuenta.consultarSaldo(),
+                exitosas.get(),
+                fallidas.get(),
+                tiempo
+        );
+    }
+
+
+    static void mostrarResultado(
+            String nombre,
+            Resultado resultado,
+            int operacionesTotales) {
+
+        System.out.println();
+        System.out.println(
+                "--- " + nombre + " ---"
+        );
+
+        System.out.printf(
+                "Saldo final: %.2f€%n",
+                resultado.saldoFinal
+        );
+
+        System.out.println(
+                "Operaciones exitosas: " +
+                        resultado.exitosas +
+                        "/" +
+                        operacionesTotales
+        );
+
+        System.out.println(
+                "Operaciones fallidas: " +
+                        resultado.fallidas +
+                        " (fondos insuficientes)"
+        );
+
+        System.out.printf(
+                "Operaciones procesadas: %d/%d%n",
+                resultado.exitosas + resultado.fallidas,
+                operacionesTotales
+        );
+
+        System.out.printf(
+                "Tiempo total: %.2fs%n",
+                resultado.tiempoMs / 1000.0
+        );
+
+        if (resultado.exitosas +
+                resultado.fallidas
+                == operacionesTotales) {
+
+            System.out.println(
+                    "Todas las operaciones fueron procesadas."
+            );
+
+        } else {
+
+            System.out.println(
+                    " OPERACIONES PERDIDAS"
+            );
         }
     }
 
 
-
-    public static void main(String[] args)
-            throws InterruptedException {
+    public static void main(String[] args) {
 
         System.out.println(
                 "=== BANCO VIRTUAL ==="
         );
 
-        System.out.println(
-                "Saldo inicial: 10000.00€"
-        );
-
-        System.out.println(
-                "50 clientes realizando "
-                        + "500 operaciones totales..."
-        );
-
-
-        CuentaLock cuentaLock =
-                new CuentaLock(SALDO_INICIAL);
-
-        long inicioLock =
-                System.currentTimeMillis();
-
-        ejecutarClientes(cuentaLock);
-
-        long finLock =
-                System.currentTimeMillis();
-
-        System.out.println();
-        System.out.println(
-                "--- CON REENTRANTLOCK ---"
-        );
-
         System.out.printf(
-                "Saldo final: %.2f€%n",
-                cuentaLock.consultarSaldo()
+                "Saldo inicial: %.2f€%n",
+                SALDO_INICIAL
         );
 
         System.out.println(
-                "Tiempo total: "
-                        + (finLock - inicioLock)
-                        + "ms"
+                CLIENTES +
+                        " clientes realizando " +
+                        TOTAL_OPERACIONES +
+                        " operaciones totales..."
         );
 
 
-        CuentaSynchronized cuentaSync =
-                new CuentaSynchronized(SALDO_INICIAL);
+        List<List<Operacion>> operaciones =
+                generarOperaciones();
 
-        long inicioSync =
-                System.currentTimeMillis();
 
-        ejecutarClientes(cuentaSync);
+        CuentaReentrantLock cuentaLock =
+                new CuentaReentrantLock(
+                        SALDO_INICIAL
+                );
 
-        long finSync =
-                System.currentTimeMillis();
+        Resultado resultadoLock =
+                ejecutarClientes(
+                        cuentaLock,
+                        operaciones
+                );
 
-        System.out.println();
-        System.out.println(
-                "--- CON SYNCHRONIZED ---"
+        mostrarResultado(
+                "CON REENTRANTLOCK",
+                resultadoLock,
+                TOTAL_OPERACIONES
         );
 
-        System.out.printf(
-                "Saldo final: %.2f€%n",
-                cuentaSync.consultarSaldo()
+        CuentaSynchronized cuentaSynchronized =
+                new CuentaSynchronized(
+                        SALDO_INICIAL
+                );
+
+        Resultado resultadoSynchronized =
+                ejecutarClientes(
+                        cuentaSynchronized,
+                        operaciones
+                );
+
+        mostrarResultado(
+                "CON SYNCHRONIZED",
+                resultadoSynchronized,
+                TOTAL_OPERACIONES
         );
-
-        System.out.println(
-                "Tiempo total: "
-                        + (finSync - inicioSync)
-                        + "ms"
-        );
-
-
 
         CuentaVolatile cuentaVolatile =
-                new CuentaVolatile(SALDO_INICIAL);
+                new CuentaVolatile(
+                        SALDO_INICIAL
+                );
 
-        long inicioVolatile =
-                System.currentTimeMillis();
+        Resultado resultadoVolatile =
+                ejecutarClientes(
+                        cuentaVolatile,
+                        operaciones
+                );
 
-        ejecutarClientes(cuentaVolatile);
-
-        long finVolatile =
-                System.currentTimeMillis();
+        mostrarResultado(
+                "CON VOLATILE",
+                resultadoVolatile,
+                TOTAL_OPERACIONES
+        );
 
         System.out.println();
         System.out.println(
-                "--- CON VOLATILE ---"
+                "=== COMPARACIÓN ==="
         );
 
         System.out.printf(
-                "Saldo final: %.2f€%n",
-                cuentaVolatile.consultarSaldo()
+                "ReentrantLock : %.2f€%n",
+                resultadoLock.saldoFinal
         );
 
-        System.out.println(
-                "Tiempo total: "
-                        + (finVolatile - inicioVolatile)
-                        + "ms"
+        System.out.printf(
+                "Synchronized  : %.2f€%n",
+                resultadoSynchronized.saldoFinal
         );
+
+        System.out.printf(
+                "Volatile      : %.2f€%n",
+                resultadoVolatile.saldoFinal
+        );
+
+        System.out.println();
+
+        if (Math.abs(
+                resultadoLock.saldoFinal -
+                        resultadoSynchronized.saldoFinal
+        ) < 0.001) {
+
+            System.out.println(
+                    "ReentrantLock y synchronized producen " +
+                            "el mismo saldo."
+            );
+
+        } else {
+
+            System.out.println(
+                    "ReentrantLock y synchronized han tenido " +
+                            "un orden de ejecución diferente."
+            );
+        }
+
+        if (resultadoVolatile.saldoFinal !=
+                resultadoLock.saldoFinal) {
+
+            System.out.println(
+                    "VOLATILE: el resultado puede ser incorrecto " +
+                            "por condiciones de carrera."
+            );
+        }
     }
 }
