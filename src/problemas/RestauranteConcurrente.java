@@ -4,7 +4,6 @@ import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Random;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ThreadLocalRandom;
@@ -17,15 +16,17 @@ public class RestauranteConcurrente {
     static final int NUM_CLIENTES = 100;
     static final int NUM_CAMAREROS = 5;
     static final int NUM_COCINEROS = 3;
-
-    static final int CAPACIDAD_MESA = 10;
+    static final int NUM_MESAS = 10;
 
     static final BlockingQueue<Cliente> clientesEsperando =
             new ArrayBlockingQueue<>(NUM_CLIENTES);
 
 
     static final BlockingQueue<Pedido> mesaPedidos =
-            new ArrayBlockingQueue<>(CAPACIDAD_MESA);
+            new ArrayBlockingQueue<>(NUM_MESAS);
+
+    static final BlockingQueue<Pedido> platosPreparados =
+            new ArrayBlockingQueue<>(NUM_MESAS);
 
 
     static final AtomicInteger clientesAtendidos =
@@ -36,9 +37,6 @@ public class RestauranteConcurrente {
 
     static final AtomicLong tiempoTotalEspera =
             new AtomicLong(0);
-
-    static final AtomicInteger vecesMesaLlena =
-            new AtomicInteger(0);
 
     static final AtomicLong tiempoCocinerosEsperando =
             new AtomicLong(0);
@@ -125,24 +123,6 @@ public class RestauranteConcurrente {
     }
 
 
-    static synchronized void mostrarEstadisticas() {
-
-        System.out.println(
-                "[ESTADÍSTICAS] " +
-                        "Clientes atendidos: " +
-                        clientesAtendidos.get() +
-                        "/" +
-                        NUM_CLIENTES +
-                        " | Platos servidos: " +
-                        platosServidos.get() +
-                        " | Pedidos en mesa: " +
-                        mesaPedidos.size() +
-                        "/" +
-                        CAPACIDAD_MESA
-        );
-    }
-
-
     static void crearClientes()
             throws InterruptedException {
 
@@ -169,12 +149,6 @@ public class RestauranteConcurrente {
 
                                 try {
 
-
-                                    if (id > 1) {
-
-                                        Thread.sleep(500);
-                                    }
-
                                     System.out.printf(
                                             "[%s] %s llega al restaurante%n",
                                             horaActual(),
@@ -194,6 +168,8 @@ public class RestauranteConcurrente {
                             });
 
             hilosClientes.add(cliente);
+
+            Thread.sleep(500);
         }
 
         for (Thread hilo : hilosClientes) {
@@ -220,7 +196,7 @@ public class RestauranteConcurrente {
 
                                 while (true) {
 
-                                    if (clientesAtendidos.get()
+                                    if (clientesCompletados.get()
                                             >= NUM_CLIENTES) {
 
                                         break;
@@ -230,6 +206,29 @@ public class RestauranteConcurrente {
 
                                     try {
 
+                                        Pedido platoPreparado = platosPreparados.poll();
+
+                                        if (platoPreparado != null) {
+
+                                            Thread.sleep(1000);
+
+                                            System.out.printf(
+                                                    "[%s] Camarero-%d lleva %s de %s, el cliente se va.%n",
+                                                    horaActual(),
+                                                    numeroCamarero,
+                                                    platoPreparado.getPlato(),
+                                                    platoPreparado.getCliente().getNombre()
+                                            );
+
+                                            platosServidos
+                                                .incrementAndGet();
+
+                                            clientesCompletados
+                                                .incrementAndGet();
+
+                                            continue;
+                                        }
+
                                         cliente =
                                                 clientesEsperando
                                                         .poll();
@@ -237,7 +236,7 @@ public class RestauranteConcurrente {
                                         if (cliente == null) {
 
                                             if (
-                                                    clientesAtendidos
+                                                    clientesCompletados
                                                             .get()
                                                             >= NUM_CLIENTES
                                             ) {
@@ -271,21 +270,6 @@ public class RestauranteConcurrente {
                                         long inicioEsperaMesa =
                                                 System.currentTimeMillis();
 
-                                        if (
-                                                mesaPedidos.remainingCapacity()
-                                                        == 0
-                                        ) {
-
-                                            vecesMesaLlena
-                                                    .incrementAndGet();
-
-                                            System.out.printf(
-                                                    "[%s] Camarero-%d espera: mesa llena%n",
-                                                    horaActual(),
-                                                    numeroCamarero
-                                            );
-                                        }
-
                                         mesaPedidos.put(pedido);
 
                                         long finEsperaMesa =
@@ -295,18 +279,17 @@ public class RestauranteConcurrente {
                                                 finEsperaMesa -
                                                         inicioEsperaMesa;
 
+                                        // Número de clientes a los que se les tomó el pedido, pero no se les llevó el plato aún
                                         clientesAtendidos
                                                 .incrementAndGet();
 
                                         System.out.printf(
-                                                "[%s] Camarero-%d deja %s de %s en la mesa%n",
+                                                "[%s] Camarero-%d deja pedido de %s de %s en la mesa de cocineros%n",
                                                 horaActual(),
                                                 numeroCamarero,
                                                 plato,
                                                 cliente.getNombre()
                                         );
-
-                                        mostrarEstadisticas();
 
                                     } catch (
                                             InterruptedException e) {
@@ -412,11 +395,9 @@ public class RestauranteConcurrente {
                                                         .getTiempoMs()
                                         );
 
-                                        platosServidos
-                                                .incrementAndGet();
 
-                                        clientesCompletados
-                                                .incrementAndGet();
+
+                                        platosPreparados.add(pedido);
 
                                         System.out.printf(
                                                 "[%s] Cocinero-%d termina %s para %s%n",
@@ -426,8 +407,6 @@ public class RestauranteConcurrente {
                                                 pedido.getCliente()
                                                         .getNombre()
                                         );
-
-                                        mostrarEstadisticas();
 
                                     } catch (
                                             InterruptedException e) {
@@ -551,10 +530,6 @@ public class RestauranteConcurrente {
                 promedioEspera
         );
 
-        System.out.println(
-                "Mesa llena (veces): " +
-                        vecesMesaLlena.get()
-        );
 
         System.out.printf(
                 "Cocineros esperando: %.2fs total%n",
